@@ -14,7 +14,8 @@ bound, not a complete picture.
 
 ## Working on it
 
-- `just test` builds and runs `--selftest` (parser checks; does not touch the app)
+- `just test` compiles with `-Onone` so assertions remain enabled, then runs
+  `--selftest` (parser checks; does not touch the app)
 - Testing anything else needs Find My running with a window on the current Space
 - The binary is gitignored; build it, don't commit it
 

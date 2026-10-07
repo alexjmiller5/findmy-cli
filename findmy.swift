@@ -9,6 +9,7 @@
 import Cocoa
 import ApplicationServices
 import MapKit
+import CryptoKit
 
 let TABS = ["People", "Devices", "Items"]
 let BUNDLE = "com.apple.findmy"
@@ -95,11 +96,30 @@ func norm(_ s: String) -> String {
      .trimmingCharacters(in: .whitespaces)
 }
 
+/// Opaque key for an explicitly exposed source handle, not a canonical person
+/// ID. Resolve only through a unique existing contact/account binding; names,
+/// ambiguous matches and account changes require review outside this parser.
+func sourceHandleKey(_ label: String) -> String? {
+    let value = label.trimmingCharacters(in: .whitespacesAndNewlines)
+    let identity: String
+    if value.range(of: #"^\+[1-9][0-9 ()-]{6,25}$"#, options: .regularExpression) != nil {
+        let phone = value.filter { !" ()-".contains($0) }
+        guard (8...15).contains(phone.count - 1) else { return nil }
+        identity = "tel:" + phone
+    } else if value.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil {
+        let parts = value.split(separator: "@")
+        identity = "mailto:" + parts[0] + "@" + parts[1].lowercased()
+    } else { return nil }
+    return SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+}
+
 func parse(_ raw: String) -> [String: Any] {
     var fields = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
     var row: [String: Any] = ["raw": raw]
     guard !fields.isEmpty else { return row }
-    row["name"] = fields.removeFirst()
+    let name = fields.removeFirst()
+    row["name"] = name
+    if let key = sourceHandleKey(name) { row["source_handle_key"] = key }
     if let last = fields.last, rxMatch(distRE, last) { row["distance"] = last; fields.removeLast() }
     if let last = fields.last, last == "Paused" {
         row["source_state"] = "paused"
@@ -138,6 +158,16 @@ if wantSelftest {
         assert(r["when"] as? String == when, "when: \(raw) -> \(r)")
         assert(r["distance"] as? String == dist, "distance: \(raw) -> \(r)")
     }
+    // Native handles can be keyed without turning a display name into identity.
+    assert(sourceHandleKey("+1 (202) 555-0101") == sourceHandleKey("+12025550101"))
+    assert(sourceHandleKey("<person-1>") == nil)
+    assert(sourceHandleKey("202-555-0101") == nil)
+    assert(sourceHandleKey("+0123456789") == nil)
+    assert(sourceHandleKey("+1234567890123456") == nil)
+    assert(sourceHandleKey("person-1@EXAMPLE.invalid") == sourceHandleKey("person-1@example.invalid"))
+    assert(sourceHandleKey("Person-1@example.invalid") != sourceHandleKey("person-1@example.invalid"))
+    assert(sourceHandleKey("person-1@example.invalid")?.count == 64)
+    assert(parse("+1 (202) 555-0101, City 1, Region 1, Now")["source_handle_key"] as? String == sourceHandleKey("+12025550101"))
     let paused = parse("Person 1, City 1, Region 1 , Paused, 10 mi")
     assert(paused["location"] as? String == "City 1, Region 1")
     assert(paused["source_state"] as? String == "paused")
@@ -153,7 +183,7 @@ if wantSelftest {
     assert(pickAddress(["Jane Doe", "Cupertino, CA • Now"]) == nil)
     assert(norm("Sam\u{2019}s iPhone") == "sam's iphone")
     assert(norm("Sam\u{2019}s iPhone").hasPrefix(norm("Sam's iPh")))
-    print("selftest ok (\(cases.count + 3) parse cases + address picker)")
+    print("selftest ok (\(cases.count + 3) parse cases + source-handle keys + address picker)")
     exit(0)
 }
 

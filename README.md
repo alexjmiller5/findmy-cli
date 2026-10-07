@@ -132,6 +132,14 @@ Visible-list snapshots always declare incomplete coverage and exit `5`.
 Unreadable tabs also produce a specific warning. Partial or missing output must
 never prove a person departed. The original `raw` text remains private output.
 
+`source_handle_key` is a SHA-256 key only when the displayed source identity
+is an explicit international phone number or email address. Phone formatting
+is normalized without guessing a country; email local-part case is preserved.
+Names yield no key. This is not a canonical person ID or proof of identity:
+resolve it through a unique confirmed contact/account binding, reject ambiguous
+or missing matches, and recheck bindings after account changes. Keys do not
+replace original private labels or source-time evidence.
+
 `source_state` distinguishes `available`, `paused`, `unavailable` and `unknown`.
 Paused rows may retain a displayed city, but do not provide fresh presence or
 a source timestamp. Unavailable placeholders are not locations. `fetched_at`

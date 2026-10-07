@@ -32,4 +32,8 @@ visible-only incomplete coverage and exit 5. Paused rows are never fresh fixes.
 - Every parsed row keeps its `raw` label so a parser bug never loses data.
 - `fetched_at` is collection time. Preserve displayed age as text; never invent
   a measured timestamp or put geocoded coordinates in a measured GPS stream.
+- `source_handle_key` recognizes only explicit international phones/emails.
+  It is a lookup key, never `people.id`. Resolve through unique confirmed native
+  contact/account bindings; reject names, ambiguity and missing identity. No
+  inferred country or email local-part case folding.
 - Run as a compiled binary; `swift findmy.swift` fails on the launch path.

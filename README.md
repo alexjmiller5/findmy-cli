@@ -1,14 +1,13 @@
 # findmy
 
-Read Apple Find My — **People, Devices and Items** — from the macOS app, as JSON.
+Read Apple Find My - **People, Devices and Items** - from the macOS app, as JSON.
 
 No Apple account login, no iCloud web API, no anisette, no AirTag key export, no
 cache decryption, no SIP or AMFI changes. It reads the running Find My app's
 **accessibility tree**, which is the same data the app is already showing you.
 
 Built as a spike. Verified on macOS 26.1 (build 25B78). **Read the Known bugs
-section before trusting its output** — issue #1 makes results silently
-incomplete.
+section before trusting its output** - snapshots cover visible rows only and explicitly report incomplete coverage.
 
 ```console
 $ findmy --text
@@ -29,34 +28,34 @@ Sam's iPhone
 
 ## Known bugs
 
-### 1. Only reads what is currently rendered — results are silently incomplete
+### 1. Only reads what is currently rendered
 
 The Find My list is **virtualized**: rows scrolled out of view are removed from
 the accessibility tree entirely, and rows below the fold were never in it. A
-snapshot therefore returns only the visible window of each list, with no
-indication that anything is missing.
+snapshot therefore returns only the visible window of each list. It reports
+`coverage: {"scope": "visible_only", "complete": false}`, lists the requested
+tabs in `incomplete`, warns on stderr and exits `5` even when those rows are readable.
 
 Measured on a People list with at least 31 entries: a fresh read returned 16
 rows; scrolling to the bottom returned 15 rows that were *entirely different*
-(the first 16 had disappeared from the tree). Nothing in the output distinguished
-the truncated result from a complete one.
+(the first 16 had disappeared from the tree). The explicit coverage fields distinguish this lower bound from a complete list.
 
-This affects every tab, and it scales with window height — a taller window shows
+This affects every tab, and it scales with window height - a taller window shows
 more. **Any count this tool reports should be treated as a lower bound.**
 
 Fixing it means driving the list: read, `AXScrollDownByPage` on the list
-container, re-read, and union the rows until the set stops growing — with
+container, re-read, and union the rows until the set stops growing - with
 de-duplication, since a row's `when`/`distance` text changes between reads.
 
 ### 2. Requires the Find My window on the current Space, and will pull you to it
 
 Find My must have an open window, and that window must be on the Space you are
 currently viewing. If it lives on another Space (or a fullscreen desktop), macOS
-switches you to that Space when the tool touches the window — a jarring, visible
+switches you to that Space when the tool touches the window - a jarring, visible
 context switch in the middle of whatever you were doing.
 
 There is no per-Space read that avoids this: the accessibility tree only exists
-where the window does. Mitigations are all placement-based — keep Find My on the
+where the window does. Mitigations are all placement-based - keep Find My on the
 Space you work in, or assign it to all Spaces (Dock icon → Options → All
 Desktops).
 
@@ -92,7 +91,7 @@ Run `just test` for the parser self-checks (no app needed).
 **Accessibility permission.** Launched from a terminal, the binary inherits the
 terminal's existing Accessibility grant and needs no setup. Run from launchd or
 any non-granted parent, it needs its own grant in System Settings → Privacy &
-Security → Accessibility — TCC state that cannot be declared in nix, and which is
+Security → Accessibility - TCC state that cannot be declared in nix, and which is
 per-binary, so it must be re-granted if the path changes. On macOS 26.1 bare Unix
 executables reportedly may not appear in that pane at all
 ([Apple Forums 807323](https://developer.apple.com/forums/thread/807323)), in
@@ -129,12 +128,19 @@ findmy --selftest                   parser self-checks
 Every row keeps its original `raw` label alongside the parsed fields, so a parser
 mistake never costs you the underlying data.
 
-If a tab cannot be read it is listed in `incomplete`, a warning goes to stderr,
-and the exit code is `5`. (This covers an *unreadable* tab. It does **not** cover
-bug #1 — a truncated list looks completely normal.)
+Visible-list snapshots always declare incomplete coverage and exit `5`.
+Unreadable tabs also produce a specific warning. Partial or missing output must
+never prove a person departed. The original `raw` text remains private output.
+
+`source_state` distinguishes `available`, `paused`, `unavailable` and `unknown`.
+Paused rows may retain a displayed city, but do not provide fresh presence or
+a source timestamp. Unavailable placeholders are not locations. `fetched_at`
+is collection time; a displayed relative `when` is preserved as text and never
+promoted to a measured source timestamp. Geocoded coordinates do not belong in
+a measured GPS stream.
 
 Exit codes: `2` no Accessibility grant · `3` cannot launch Find My ·
-`4` UI never became readable · `5` one or more tabs unread.
+`4` UI never became readable · `5` incomplete visible-list coverage or unread tabs.
 
 ## Other limits
 
@@ -167,14 +173,14 @@ Load-bearing and non-obvious, kept so they are not rediscovered the hard way:
 - Launch must go through `open -g`. `NSWorkspace.openApplication(activates:
   false)` starts the process but never builds a window, leaving a permanently
   empty AX tree.
-- Never `hide()` the app to hand focus back — a hidden app tears down its AX tree
+- Never `hide()` the app to hand focus back - a hidden app tears down its AX tree
   and the next run reads nothing.
 - Each tab must be confirmed selected (`AXValue == 1`) *and* its rows must differ
   from the previous tab's before being recorded. A press that silently no-ops
   otherwise files the previous tab's rows under the next tab's name.
 - Rows are read only from the container that is the sibling of the `AXTabGroup`.
   Reading the whole window pulls an open detail pane's labels in as extra rows.
-  Do not fall back to a whole-window read when that container is missing — during
+  Do not fall back to a whole-window read when that container is missing - during
   a tab transition it briefly vanishes, and the larger set never settles.
 - Back-to-back invocations can catch the UI mid-transition; a failed tab is
   retried once after bouncing to another tab.
@@ -183,9 +189,9 @@ Load-bearing and non-obvious, kept so they are not rediscovered the hard way:
 
 ## Prior art
 
-- [omarshahine/findmy-cli](https://github.com/omarshahine/findmy-cli) — same
+- [omarshahine/findmy-cli](https://github.com/omarshahine/findmy-cli) - same
   goal, screenshot + Vision OCR instead of the AX tree. Well packaged (Homebrew,
   npm, a Claude Code plugin).
-- [roelvangils/airtrackr](https://github.com/roelvangils/airtrackr) — the same
+- [roelvangils/airtrackr](https://github.com/roelvangils/airtrackr) - the same
   AX-tree technique, wrapped in a FastAPI + Leaflet dashboard.
 - No MCP server for Find My exists in any registry, by any technique.

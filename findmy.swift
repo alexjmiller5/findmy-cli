@@ -101,9 +101,22 @@ func parse(_ raw: String) -> [String: Any] {
     guard !fields.isEmpty else { return row }
     row["name"] = fields.removeFirst()
     if let last = fields.last, rxMatch(distRE, last) { row["distance"] = last; fields.removeLast() }
-    if let last = fields.last, rxMatch(whenRE, last) { row["when"] = last; fields.removeLast() }
+    if let last = fields.last, last == "Paused" {
+        row["source_state"] = "paused"
+        fields.removeLast()
+    } else if let last = fields.last, rxMatch(whenRE, last) {
+        row["when"] = last
+        fields.removeLast()
+    }
     let loc = fields.joined(separator: ", ")
-    if !loc.isEmpty { row["location"] = loc }
+    if ["Address Unavailable", "No location found", "Location Not Available"].contains(loc) {
+        row["source_state"] = "unavailable"
+    } else if !loc.isEmpty {
+        row["location"] = loc
+        if row["source_state"] == nil { row["source_state"] = "available" }
+    } else if row["source_state"] == nil {
+        row["source_state"] = "unknown"
+    }
     return row
 }
 
@@ -121,17 +134,26 @@ if wantSelftest {
     for (raw, name, loc, when, dist) in cases {
         let r = parse(raw)
         assert(r["name"] as? String == name, "name: \(raw) -> \(r)")
-        assert(r["location"] as? String == loc, "location: \(raw) -> \(r)")
+        assert(r["location"] as? String == (["Address Unavailable", "No location found"].contains(loc ?? "") ? nil : loc), "location: \(raw) -> \(r)")
         assert(r["when"] as? String == when, "when: \(raw) -> \(r)")
         assert(r["distance"] as? String == dist, "distance: \(raw) -> \(r)")
     }
+    let paused = parse("Person 1, City 1, Region 1 , Paused, 10 mi")
+    assert(paused["location"] as? String == "City 1, Region 1")
+    assert(paused["source_state"] as? String == "paused")
+    assert(paused["when"] == nil)
+    let unavailable = parse("Person 2, No location found")
+    assert(unavailable["source_state"] as? String == "unavailable")
+    assert(unavailable["location"] == nil)
+    let live = parse("Person 3, City 2, Region 2 , Now, 5 mi")
+    assert(live["source_state"] as? String == "available")
     // address picker
     assert(pickAddress(["Jane Doe", "1 Infinite Loop, Cupertino, CA  95014", "Live"])
            == "1 Infinite Loop, Cupertino, CA  95014")
     assert(pickAddress(["Jane Doe", "Cupertino, CA • Now"]) == nil)
     assert(norm("Sam\u{2019}s iPhone") == "sam's iphone")
     assert(norm("Sam\u{2019}s iPhone").hasPrefix(norm("Sam's iPh")))
-    print("selftest ok (\(cases.count) parse cases + address picker)")
+    print("selftest ok (\(cases.count + 3) parse cases + address picker)")
     exit(0)
 }
 
@@ -409,11 +431,14 @@ if mode == "detail" {
             result[tab.lowercased()] = []
         }
     }
+    // ponytail: visible rows only; prove list exhaustion before claiming complete coverage.
+    result["coverage"] = ["scope": "visible_only", "complete": false]
+    result["incomplete"] = wanted
+    FileHandle.standardError.write("findmy: visible rows only; list coverage is unverified\n".data(using: .utf8)!)
     if !bad.isEmpty {
         // Never let an unread tab pass as "nothing to report".
         FileHandle.standardError.write("findmy: could not read tab(s): \(bad.joined(separator: ", "))\n"
             .data(using: .utf8)!)
-        result["incomplete"] = bad
     }
     restoreTab()
 }

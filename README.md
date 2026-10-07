@@ -147,6 +147,11 @@ resolve it through a unique confirmed contact/account binding, reject ambiguous
 or missing matches, and recheck bindings after account changes. Keys do not
 replace original private labels or source-time evidence.
 
+Each native row read includes `source_check_id` and `checked_at`. These identify
+the actual accessibility check and its collection time. Serializing the same
+check does not renew either value. They are not location-fix identifiers or
+measured source timestamps; source age remains the original displayed text.
+
 `source_state` distinguishes `available`, `paused`, `unavailable` and `unknown`.
 Paused rows may retain a displayed city, but do not provide fresh presence or
 a source timestamp. Unavailable placeholders are not locations. `fetched_at`

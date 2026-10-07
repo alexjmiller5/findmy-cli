@@ -157,6 +157,16 @@ func parse(_ raw: String) -> [String: Any] {
     return row
 }
 
+/// Collection identity/time describe this actual AX read, not a sensor fix.
+/// Serialize the same check without renewing its evidence or inventing tst.
+func sourceCheck(raw: String, fields: [String: String], checkedAt: Date, id: String) -> [String: Any] {
+    var value = parse(raw)
+    value["raw_fields"] = fields
+    value["source_check_id"] = id
+    value["checked_at"] = ISO8601DateFormatter().string(from: checkedAt)
+    return value
+}
+
 if wantSelftest {
     let cases: [(String, String, String?, String?, String?)] = [
         ("Jane Doe, Cupertino, CA , Now, 0 mi", "Jane Doe", "Cupertino, CA", "Now", "0 mi"),
@@ -207,6 +217,14 @@ if wantSelftest {
     assert(unavailable["location"] == nil)
     let live = parse("Person 3, City 2, Region 2 , Now, 5 mi")
     assert(live["source_state"] as? String == "available")
+    let collected = Date(timeIntervalSince1970: 1_800_000_000)
+    let check = sourceCheck(raw: "<person-1>, City 1, Now", fields: ["HomeElementCell":"<person-1>, City 1, Now"],
+                            checkedAt: collected, id: "example-check-1")
+    assert(check["source_check_id"] as? String == "example-check-1")
+    assert(check["checked_at"] as? String == "2027-01-15T08:00:00Z")
+    assert(check["when"] as? String == "Now")
+    assert(check["tst"] == nil && check["latitude"] == nil && check["longitude"] == nil)
+    assert(check["raw_fields"] as? [String:String] == ["HomeElementCell":"<person-1>, City 1, Now"])
     // address picker
     assert(pickAddress(["Jane Doe", "1 Infinite Loop, Cupertino, CA  95014", "Live"])
            == "1 Infinite Loop, Cupertino, CA  95014")
@@ -284,10 +302,10 @@ struct SourceRow {
     let element: AXUIElement
     let fields: [String: String]
     let text: String
+    let checkedAt: Date
+    let checkID: String
     var record: [String: Any] {
-        var value = parse(text)
-        value["raw_fields"] = fields
-        return value
+        sourceCheck(raw: text, fields: fields, checkedAt: checkedAt, id: checkID)
     }
 }
 
@@ -309,7 +327,8 @@ func sourceRows() -> [SourceRow] {
             if key == "HomeElementCell" { compact = text }
         }
         guard let text = rowText(fields) else { return nil }
-        return SourceRow(element: compact ?? cell, fields: fields, text: text)
+        return SourceRow(element: compact ?? cell, fields: fields, text: text,
+                         checkedAt: Date(), checkID: UUID().uuidString.lowercased())
     }
 }
 

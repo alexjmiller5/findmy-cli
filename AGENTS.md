@@ -34,6 +34,9 @@ visible-only incomplete coverage and exit 5. Paused rows are never fresh fixes.
   exact labels in `raw_fields`, with `raw` the assembled parsing representation.
 - Detail lookups require a unique source label and successful native actions.
   Addresses come only from a unique scoped popover, never all window labels.
+- Each actual row read has an immutable `source_check_id` and `checked_at`.
+  Serialization preserves both; a replay is not a second source check. These
+  describe AX collection, never distinct sensor fixes or measured `tst`.
 - `fetched_at` is collection time. Preserve displayed age as text; never invent
   a measured timestamp or put geocoded coordinates in a measured GPS stream.
 - `source_handle_key` recognizes only explicit international phones/emails.

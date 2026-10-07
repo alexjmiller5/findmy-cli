@@ -29,7 +29,11 @@ visible-only incomplete coverage and exit 5. Paused rows are never fresh fixes.
   being recorded, or a no-op tab press files one tab's rows under another's name.
 - **Prefer failing loudly over guessing.** Unreadable tabs go into `incomplete`
   with a stderr warning and exit 5. Any new failure mode should do the same.
-- Every parsed row keeps its `raw` label so a parser bug never loses data.
+- Read one `HomeElementCell` at a time. Compact and expanded AX labels differ;
+  title/subtitle/distance fragments never become independent people. Preserve
+  exact labels in `raw_fields`, with `raw` the assembled parsing representation.
+- Detail lookups require a unique source label and successful native actions.
+  Addresses come only from a unique scoped popover, never all window labels.
 - `fetched_at` is collection time. Preserve displayed age as text; never invent
   a measured timestamp or put geocoded coordinates in a measured GPS stream.
 - `source_handle_key` recognizes only explicit international phones/emails.

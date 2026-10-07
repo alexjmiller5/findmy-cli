@@ -110,8 +110,11 @@ findmy --selftest                   parser self-checks
   --launch=no    never launch Find My; fail if it is not ready
 ```
 
-`detail` matches on a name prefix, case- and apostrophe-insensitive, so
-`"sam's iphone"` finds `Sam's iPhone`.
+`detail` prefers an exact label, then accepts a unique name prefix, case- and
+apostrophe-insensitive. Ambiguous prefixes fail without selecting an entry.
+Selection and detail-opening must succeed; address labels come only from one
+scoped detail popover. Missing or changed native UI fails without reading an
+address from the list or another pane.
 
 ### Output
 
@@ -125,8 +128,12 @@ findmy --selftest                   parser self-checks
 }
 ```
 
-Every row keeps its original `raw` label alongside the parsed fields, so a parser
-mistake never costs you the underlying data.
+Each output record belongs to one native `HomeElementCell`. Compact and
+expanded accessibility trees are supported: expanded title, subtitle and
+distance fields are assembled only within that cell. `raw_fields` preserves
+those exact source labels; `raw` is their assembled parsing representation.
+Nested text fragments and unrelated panes are not extra people. A duplicate
+field makes that row unreadable; snapshots remain explicitly incomplete.
 
 Visible-list snapshots always declare incomplete coverage and exit `5`.
 Unreadable tabs also produce a specific warning. Partial or missing output must

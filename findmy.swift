@@ -113,6 +113,23 @@ func sourceHandleKey(_ label: String) -> String? {
     return SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
 }
 
+/// Only fields belonging to one native row may be assembled. Expanded AX
+/// trees expose title, subtitle and distance separately from the compact label.
+func matchingRows(_ labels: [String], query: String) -> [Int] {
+    let key = norm(query)
+    guard !key.isEmpty else { return [] }
+    let names = labels.map { norm($0.components(separatedBy: ",")[0]) }
+    let exact = names.indices.filter { names[$0] == key }
+    return exact.isEmpty ? names.indices.filter { names[$0].hasPrefix(key) } : exact
+}
+
+func rowText(_ fields: [String: String]) -> String? {
+    if let compact = fields["HomeElementCell"], !compact.isEmpty { return compact }
+    guard let title = fields["HomeCellTitleLabel"], !title.isEmpty else { return nil }
+    return [title, fields["HomeCellSubtitleLabel"], fields["HomeCellDistance"]]
+        .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
+}
+
 func parse(_ raw: String) -> [String: Any] {
     var fields = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
     var row: [String: Any] = ["raw": raw]
@@ -158,6 +175,19 @@ if wantSelftest {
         assert(r["when"] as? String == when, "when: \(raw) -> \(r)")
         assert(r["distance"] as? String == dist, "distance: \(raw) -> \(r)")
     }
+    let candidates = ["<person-1>, City 1, Now", "<person-12>, City 2, Now"]
+    assert(matchingRows(candidates, query: "<person-") == [0, 1])
+    assert(matchingRows(candidates, query: "<person-1>") == [0])
+    assert(matchingRows(candidates, query: "") == [])
+    assert(matchingRows(candidates, query: "City 1") == [])
+    let compact = rowText(["HomeElementCell":"<person-1>, City 1, Region 1, Now, 5 mi"])
+    assert(compact == "<person-1>, City 1, Region 1, Now, 5 mi")
+    let expanded = rowText(["HomeCellTitleLabel":"+12025550101", "HomeCellSubtitleLabel":"City 1, Region 1, Now", "HomeCellDistance":"5 mi"])
+    assert(expanded == "+12025550101, City 1, Region 1, Now, 5 mi")
+    assert(parse(expanded!)["name"] as? String == "+12025550101")
+    assert(parse(expanded!)["location"] as? String == "City 1, Region 1")
+    assert(rowText(["HomeCellSubtitleLabel":"City 1, Region 1, Now"]) == nil)
+    assert(rowText(["UnrelatedPane":"<person-1>, City 1, Now"]) == nil)
     // Native handles can be keyed without turning a display name into identity.
     assert(sourceHandleKey("+1 (202) 555-0101") == sourceHandleKey("+12025550101"))
     assert(sourceHandleKey("<person-1>") == nil)
@@ -250,18 +280,40 @@ func listContainer() -> AXUIElement? {
     return siblings.first { sattr($0, "AXRole") != "AXTabGroup" }
 }
 
-func rowStrings() -> [String] {
-    // No fallback to the whole app: during a tab transition the tab group can
-    // briefly vanish, and a whole-window read would return a different, larger
-    // set that never settles.
-    guard let root = listContainer() else { return [] }
-    var out: [AXUIElement] = []
-    findAll(root, { sattr($0, "AXRole") == "AXStaticText" }, &out)
-    return out.map(label)
-        .map { $0.trimmingCharacters(in: .whitespaces) }
-        .filter { !$0.isEmpty }
+struct SourceRow {
+    let element: AXUIElement
+    let fields: [String: String]
+    let text: String
+    var record: [String: Any] {
+        var value = parse(text)
+        value["raw_fields"] = fields
+        return value
+    }
 }
-func rows() -> [String] { rowStrings().filter { !TABS.contains($0) } }
+
+func sourceRows() -> [SourceRow] {
+    guard let root = listContainer() else { return [] }
+    var cells: [AXUIElement] = []
+    findAll(root, { sattr($0, "AXIdentifier") == "HomeElementCell" && sattr($0, "AXRole") == "AXGroup" }, &cells)
+    return cells.compactMap { cell in
+        var texts: [AXUIElement] = []
+        findAll(cell, { sattr($0, "AXRole") == "AXStaticText" }, &texts)
+        var fields: [String: String] = [:]
+        var compact: AXUIElement?
+        for text in texts {
+            guard let key = sattr(text, "AXIdentifier"),
+                  ["HomeElementCell", "HomeCellTitleLabel", "HomeCellSubtitleLabel", "HomeCellDistance"].contains(key) else { continue }
+            let value = label(text)
+            guard fields[key] == nil else { return nil } // Ambiguous row structure fails closed.
+            fields[key] = value
+            if key == "HomeElementCell" { compact = text }
+        }
+        guard let text = rowText(fields) else { return nil }
+        return SourceRow(element: compact ?? cell, fields: fields, text: text)
+    }
+}
+
+func rowStrings() -> [String] { sourceRows().map(\.text) }
 
 func windowCount() -> Int {
     var v: CFTypeRef?
@@ -314,7 +366,7 @@ func waitReady(timeout: TimeInterval) -> Bool {
 /// otherwise leave the previous tab's rows in place, to be recorded under this
 /// tab's name - a confident, wrong answer.
 @discardableResult
-func selectTab(_ want: String, previousRows: [String] = []) -> [String]? {
+func selectTab(_ want: String, previousRows: [String] = []) -> [SourceRow]? {
     guard let tab = tabNamed(want) else { return nil }
     var deadline = Date().addingTimeInterval(10)
     while !isSelected(want) && Date() < deadline {
@@ -327,10 +379,11 @@ func selectTab(_ want: String, previousRows: [String] = []) -> [String]? {
     var last: [String] = []
     deadline = Date().addingTimeInterval(15)
     while Date() < deadline {
-        let now = rows()
+        let snapshot = sourceRows()
+        let now = snapshot.map(\.text)
         if !now.isEmpty && now == last && now != previousRows {
             stable += 1
-            if stable >= 3 { return now }
+            if stable >= 3 { return snapshot }
         } else {
             stable = 0
         }
@@ -382,14 +435,22 @@ func detail(_ name: String) -> [String: Any] {
     var out: [String: Any] = ["query": name]
 
     // Find the row in whichever tab holds it.
-    var found: AXUIElement?
+    var found: SourceRow?
     var prev: [String] = []
     for tab in TABS {
-        if !isSelected(tab) { prev = selectTab(tab, previousRows: prev) ?? prev }
-        var listTexts: [AXUIElement] = []
-        findAll(listContainer() ?? ax, { sattr($0, "AXRole") == "AXStaticText" }, &listTexts)
-        if let r = listTexts.first(where: { norm(label($0)).hasPrefix(norm(name)) }) {
-            found = r
+        if !isSelected(tab) {
+            guard let selected = selectTab(tab, previousRows: prev) else { continue }
+            prev = selected.map(\.text)
+        }
+        let candidates = sourceRows()
+        let matches = matchingRows(candidates.map(\.text), query: name)
+        if matches.count > 1 {
+            out["error"] = "ambiguous entry prefix; use an exact unique source label"
+            restoreTab()
+            return out
+        }
+        if let index = matches.first {
+            found = candidates[index]
             out["tab"] = tab
             break
         }
@@ -398,20 +459,37 @@ func detail(_ name: String) -> [String: Any] {
         out["error"] = "no entry starting with \"\(name)\""
         return out
     }
-    out["row"] = parse(label(row))
+    out["row"] = row.record
 
-    AXUIElementPerformAction(row, "AXPress" as CFString)
+    guard AXUIElementPerformAction(row.element, "AXPress" as CFString) == .success else {
+        out["error"] = "could not select the requested source row"
+        restoreTab()
+        return out
+    }
     Thread.sleep(forTimeInterval: 2.5)
 
-    guard let info = role("AXButton").first(where: { label($0) == "More Info" }) else {
+    let infoButtons = role("AXButton").filter { label($0) == "More Info" }
+    guard infoButtons.count == 1, let info = infoButtons.first else {
         out["error"] = "no More Info button (entry may have no location)"
         restoreTab()
         return out
     }
-    AXUIElementPerformAction(info, "AXPress" as CFString)
+    guard AXUIElementPerformAction(info, "AXPress" as CFString) == .success else {
+        out["error"] = "could not open the requested detail"
+        restoreTab()
+        return out
+    }
     Thread.sleep(forTimeInterval: 3.0)
 
-    let texts = role("AXStaticText").map(label).filter { !$0.isEmpty }
+    let popovers = role("AXPopover")
+    guard popovers.count == 1, let popover = popovers.first else {
+        out["error"] = "no unique scoped detail pane"
+        restoreTab()
+        return out
+    }
+    var detailLabels: [AXUIElement] = []
+    findAll(popover, { sattr($0, "AXRole") == "AXStaticText" }, &detailLabels)
+    let texts = detailLabels.map(label).filter { !$0.isEmpty }
     if let addr = pickAddress(texts) {
         let clean = addr.replacingOccurrences(of: "  ", with: " ")
         out["address"] = clean
@@ -425,7 +503,7 @@ func detail(_ name: String) -> [String: Any] {
     out["detail_texts"] = texts
 
     // Leave the UI as we found it - a left-open popover breaks the next read.
-    if let pop = role("AXPopover").first { AXUIElementPerformAction(pop, "AXCancel" as CFString) }
+    AXUIElementPerformAction(popover, "AXCancel" as CFString)
     Thread.sleep(forTimeInterval: 0.8)
     restoreTab()
     return out
@@ -454,8 +532,8 @@ if mode == "detail" {
             got = selectTab(tab, previousRows: [])
         }
         if let got {
-            prev = got
-            result[tab.lowercased()] = got.map(parse)
+            prev = got.map(\.text)
+            result[tab.lowercased()] = got.map(\.record)
         } else {
             bad.append(tab)
             result[tab.lowercased()] = []

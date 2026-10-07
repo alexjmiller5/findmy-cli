@@ -44,3 +44,11 @@ visible-only incomplete coverage and exit 5. Paused rows are never fresh fixes.
   contact/account bindings; reject names, ambiguity and missing identity. No
   inferred country or email local-part case folding.
 - Run as a compiled binary; `swift findmy.swift` fails on the launch path.
+
+## Packaging
+
+`flake.nix` exports the Darwin package and an optional Home Manager module;
+`programs.friend-location-collector.enable` installs only the reader. The
+package keeps assertions enabled and runs `--selftest` during its build.
+Nix evaluation/dry-run pass; the actual Nix compiler build is unverified.
+No schedule, stream consumer enrollment or credential is configured.

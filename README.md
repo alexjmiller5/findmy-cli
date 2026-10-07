@@ -82,11 +82,19 @@ a rendered list.
 ## Build & install
 
 ```sh
-just build                    # or: swiftc -O findmy.swift -o findmy
-cp findmy ~/.local/bin/       # anywhere on PATH
+just build                    # development binary
+nix build .#default            # installed-package build
+nix run . -- --selftest        # packaged parser check
 ```
 
 Run `just test` for the parser self-checks (no app needed).
+
+The flake exports a Darwin package and `homeModules.default`; the module option
+`programs.friend-location-collector.enable` installs the reader only. No
+schedule, credential or user configuration is bundled. The package definition
+has passed evaluation and dry-run planning; its Nix compiler build remains
+unverified. Development selfchecks and typechecking use the installed Xcode.
+Consumers should make this flake's nixpkgs input follow their own nixpkgs.
 
 **Accessibility permission.** Launched from a terminal, the binary inherits the
 terminal's existing Accessibility grant and needs no setup. Run from launchd or

@@ -37,9 +37,13 @@ Swift file, no dependencies. The installed package and app are named
   to the previous app; never hide or quit to do that.
 - **A tab's rows must be confirmed distinct from the previous tab's** before
   being recorded, or a no-op tab press files one tab's rows under another's name.
-- **Complete means proven.** A list is complete only when scrolled to the top,
-  then paged down with every page overlapping the sequence in order until two
-  scrolls add nothing. Gaps, reorders and duplicate titles fail closed.
+- **Complete means proven.** A list is complete only from a proven top, with
+  every page overlapping the sequence in order, to a proven bottom. An end is
+  two no-change scrolls plus the edge geometry (first row starts / last row
+  ends inside the list frame); no-change alone is what a concurrent scroller
+  fakes. Gaps, reorders and duplicate titles fail closed. UI-driving runs hold
+  the per-user `findmy-cli.lock`; test aids that scroll the list do not, so
+  never run them while a collector or cadence read is in flight.
 - **Prefer failing loudly over guessing.** Unproven tabs go into `incomplete`
   with a stderr warning and exit 5. Any new failure mode should do the same.
   Only the exact "Enable Notifications" / "Not Now" sheet is dismissed (Not

@@ -412,6 +412,17 @@ if wantSelftest {
 
 struct Failure: Error { let message: String; let code: Int32 }
 
+/// One process drives the Find My UI at a time: another reader scrolling the
+/// same list would corrupt both reads. Waits for the per-user lock.
+func withUILock<T>(_ body: () throws -> T) rethrows -> T {
+    var dir = [CChar](repeating: 0, count: Int(PATH_MAX))
+    confstr(_CS_DARWIN_USER_TEMP_DIR, &dir, dir.count)
+    let fd = open(String(cString: dir) + "findmy-cli.lock", O_CREAT | O_RDWR, 0o600)
+    if fd >= 0 { flock(fd, LOCK_EX) }
+    defer { if fd >= 0 { flock(fd, LOCK_UN); close(fd) } }
+    return try body()
+}
+
 func findMyApp() -> NSRunningApplication? {
     NSRunningApplication.runningApplications(withBundleIdentifier: BUNDLE).first
 }
@@ -657,14 +668,17 @@ func wakeIfPaused() {
 // the sequence until two scrolls in a row add nothing. Every page must overlap
 // the previous one in order, so a skipped or reordered row fails closed.
 
-/// Read until two consecutive reads agree on the visible row identities.
+func identities(_ rows: [SourceRow]) -> [String] { rows.map { rowIdentity($0.text) } }
+
+/// Read until three consecutive reads, 0.3 s apart, agree on the visible rows.
 func settledRows() -> [SourceRow] {
     var last = sourceRows()
+    var same = 0
     let deadline = Date().addingTimeInterval(5)
-    while Date() < deadline {
+    while Date() < deadline && same < 2 {
         Thread.sleep(forTimeInterval: 0.3)
         let now = sourceRows()
-        if now.map({ rowIdentity($0.text) }) == last.map({ rowIdentity($0.text) }) { return now }
+        same = identities(now) == identities(last) ? same + 1 : 0
         last = now
     }
     return last
@@ -674,8 +688,28 @@ func scroll(_ action: String) {
     if let list = listContainer() { AXUIElementPerformAction(list, action as CFString) }
 }
 
-/// All rows of the selected tab, and whether the whole list was proven read.
-func enumerateList(maxPages: Int = 100) -> (rows: [SourceRow], complete: Bool) {
+func frame(_ el: AXUIElement) -> CGRect? {
+    guard let p = attr(el, "AXPosition"), let s = attr(el, "AXSize") else { return nil }
+    var origin = CGPoint.zero, size = CGSize.zero
+    AXValueGetValue(p as! AXValue, .cgPoint, &origin)
+    AXValueGetValue(s as! AXValue, .cgSize, &size)
+    return CGRect(origin: origin, size: size)
+}
+
+/// Positive proof of an end: only at the top does the first rendered row
+/// start inside the list's frame, only at the bottom does the last one end
+/// inside it; every other page has a row cut by that edge. "Scrolling changed
+/// nothing" alone is not proof - another reader scrolling the other way
+/// looks the same.
+func atListEdge(top: Bool) -> Bool {
+    guard let list = listContainer(), let box = frame(list) else { return false }
+    let cells = (attr(list, "AXChildren") as? [AXUIElement] ?? []).compactMap(frame)
+    guard let first = cells.map(\.minY).min(), let last = cells.map(\.maxY).max() else { return false }
+    return top ? first >= box.minY - 0.5 : last <= box.maxY + 0.5
+}
+
+/// Scroll up until two scrolls change nothing and the top edge is in view.
+func scrollToTop(maxPages: Int) -> [SourceRow]? {
     var page = settledRows()
     var idle = 0
     var tries = 0
@@ -683,19 +717,26 @@ func enumerateList(maxPages: Int = 100) -> (rows: [SourceRow], complete: Bool) {
         tries += 1
         scroll("AXScrollUpByPage")
         let next = settledRows()
-        idle = next.map({ rowIdentity($0.text) }) == page.map({ rowIdentity($0.text) }) ? idle + 1 : 0
+        idle = identities(next) == identities(page) ? idle + 1 : 0
         page = next
     }
-    guard idle >= 2, var sequence = mergePage([], page.map({ rowIdentity($0.text) })) else { return (page, false) }
-    var rows = page
-    idle = 0
+    return idle >= 2 && atListEdge(top: true) ? page : nil
+}
+
+/// All rows of the selected tab, and whether the whole list was proven read:
+/// from a proven top, every page continuing the sequence, to a proven bottom.
+func enumerateList(maxPages: Int = 100) -> (rows: [SourceRow], complete: Bool) {
+    guard let top = scrollToTop(maxPages: maxPages),
+          var sequence = mergePage([], identities(top)) else { return (sourceRows(), false) }
+    var rows = top
+    var idle = 0
     for _ in 0..<maxPages {
         scroll("AXScrollDownByPage")
         let next = settledRows()
-        guard let added = mergePage(sequence, next.map({ rowIdentity($0.text) })) else { return (rows, false) }
+        guard let added = mergePage(sequence, identities(next)) else { return (rows, false) }
         if added.isEmpty {
             idle += 1
-            if idle >= 2 { return (rows, true) }
+            if idle >= 2 { return (rows, atListEdge(top: false)) }
             continue
         }
         idle = 0
@@ -905,17 +946,17 @@ func append(_ body: Data, to url: URL, token: String) -> String? {
 func collectOnce(_ url: URL, tokenCommand: String, handlesPath: String) -> Int32 {
     var summary: [String: Any] = ["at": iso.string(from: Date()), "stream": streamName]
     defer { print(String(decoding: recordJSON(summary), as: UTF8.self)); fflush(stdout) }
-    do { try prepare() } catch {
-        let failure = error as! Failure
-        summary["error"] = failure.message
-        return failure.code
-    }
     guard let data = FileManager.default.contents(atPath: handlesPath),
           let handles = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] else {
         summary["error"] = "handle map unreadable: \(handlesPath)"
         return 64
     }
-    let snap = snapshot(["People"])
+    let snap: [String: Any]
+    do { snap = try withUILock { try prepare(); return snapshot(["People"]) } } catch {
+        let failure = error as! Failure
+        summary["error"] = failure.message
+        return failure.code
+    }
     let complete = (snap["incomplete"] as? [String])?.isEmpty ?? false
     let rows = snap["people"] as? [[String: Any]] ?? []
     let checks = cityChecks(rows, handles: handles, complete: complete)
@@ -955,12 +996,15 @@ case "collect":
         if every == 0 { exit(code) }
         Thread.sleep(forTimeInterval: TimeInterval(every))
     }
-case "detail":
-    do { try prepare() } catch { let f = error as! Failure; die(f.message, f.code) }
-    result = ["fetched_at": iso.string(from: Date()), "detail": detail(detailName)]
 default:
-    do { try prepare() } catch { let f = error as! Failure; die(f.message, f.code) }
-    result = snapshot(mode == "all" ? TABS : TABS.filter { $0.lowercased() == mode })
+    do {
+        result = try withUILock {
+            try prepare()
+            return mode == "detail"
+                ? ["fetched_at": iso.string(from: Date()), "detail": detail(detailName)]
+                : snapshot(mode == "all" ? TABS : TABS.filter { $0.lowercased() == mode })
+        }
+    } catch { let f = error as! Failure; die(f.message, f.code) }
 }
 
 // MARK: - Output

@@ -33,12 +33,17 @@ Sam's iPhone
 
 The Find My lists are **virtualized**: rows scrolled out of view are removed
 from the accessibility tree. A snapshot therefore drives each list: it scrolls
-the list container to the top (`AXScrollUpByPage` until two scrolls change
-nothing), then pages down (`AXScrollDownByPage`), merging every settled page
-onto the sequence by row title until two scrolls add nothing. Each page must
-continue the sequence it overlaps, in order; a gap, a reorder mid-scroll or a
-duplicate title fails closed. A list that fails is read once more, then
-reported in `incomplete`.
+the list container to the top (`AXScrollUpByPage`), then pages down
+(`AXScrollDownByPage`), merging every settled page onto the sequence by row
+title. Each page must continue the sequence it overlaps, in order; a gap, a
+reorder mid-scroll or a duplicate title fails closed. Each end needs two
+scrolls that change nothing *and* positive proof from the geometry: only at
+the top does the first rendered row start inside the list's frame, only at the
+bottom does the last row end inside it. (Two scrolls that change nothing alone
+are not proof: another reader scrolling the other way looks the same.) A list
+that fails is read once more, then reported in `incomplete`. One `findmy`
+process drives the UI at a time: the others wait on a per-user lock in the
+Darwin user temp directory.
 
 `coverage: {"scope": "full_list", "complete": true}` means every tab was proven
 read; otherwise `complete` is false, the unproven tabs are in `incomplete`,

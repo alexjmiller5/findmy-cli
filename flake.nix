@@ -19,5 +19,6 @@
         };
       });
       homeModules.default = import ./nix/home-module.nix;
+      darwinModules.default = import ./nix/darwin-module.nix;
     };
 }

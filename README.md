@@ -6,8 +6,11 @@ No Apple account login, no iCloud web API, no anisette, no AirTag key export, no
 cache decryption, no SIP or AMFI changes. It reads the running Find My app's
 **accessibility tree**, which is the same data the app is already showing you.
 
-Built as a spike. Verified on macOS 26.1 (build 25B78). **Read the Known bugs
-section before trusting its output** - snapshots cover visible rows only and explicitly report incomplete coverage.
+Verified on macOS 26.6 (Mac mini, always-on console session). A snapshot
+scrolls each list to its end and says whether every row was proven read; see
+[Coverage](#coverage). It also runs as a collector that appends one coarse,
+city-grade check per resolved friend to a [soma](https://github.com/alexjmiller5/soma)
+stream (see [Collector](#collector)).
 
 ```console
 $ findmy --text
@@ -26,42 +29,41 @@ Sam's iPhone
   coords:  37.3317504, -122.0301353
 ```
 
-## Known bugs
+## Coverage
 
-### 1. Only reads what is currently rendered
+The Find My lists are **virtualized**: rows scrolled out of view are removed
+from the accessibility tree. A snapshot therefore drives each list: it scrolls
+the list container to the top (`AXScrollUpByPage` until two scrolls change
+nothing), then pages down (`AXScrollDownByPage`), merging every settled page
+onto the sequence by row title until two scrolls add nothing. Each page must
+continue the sequence it overlaps, in order; a gap, a reorder mid-scroll or a
+duplicate title fails closed. A list that fails is read once more, then
+reported in `incomplete`.
 
-The Find My list is **virtualized**: rows scrolled out of view are removed from
-the accessibility tree entirely, and rows below the fold were never in it. A
-snapshot therefore returns only the visible window of each list. It reports
-`coverage: {"scope": "visible_only", "complete": false}`, lists the requested
-tabs in `incomplete`, warns on stderr and exits `5` even when those rows are readable.
+`coverage: {"scope": "full_list", "complete": true}` means every tab was proven
+read; otherwise `complete` is false, the unproven tabs are in `incomplete`,
+stderr says so and the exit code is `5`. Partial or missing output never proves
+a person departed.
 
-Measured on a People list with at least 31 entries: a fresh read returned 16
-rows; scrolling to the bottom returned 15 rows that were *entirely different*
-(the first 16 had disappeared from the tree). The explicit coverage fields distinguish this lower bound from a complete list.
+### Requires the Find My window on the current Space
 
-This affects every tab, and it scales with window height - a taller window shows
-more. **Any count this tool reports should be treated as a lower bound.**
-
-Fixing it means driving the list: read, `AXScrollDownByPage` on the list
-container, re-read, and union the rows until the set stops growing - with
-de-duplication, since a row's `when`/`distance` text changes between reads.
-
-### 2. Requires the Find My window on the current Space, and will pull you to it
-
-Find My must have an open window, and that window must be on the Space you are
-currently viewing. If it lives on another Space (or a fullscreen desktop), macOS
-switches you to that Space when the tool touches the window - a jarring, visible
-context switch in the middle of whatever you were doing.
-
-There is no per-Space read that avoids this: the accessibility tree only exists
-where the window does. Mitigations are all placement-based - keep Find My on the
+Find My must have an open window on the Space you are viewing; the
+accessibility tree exists only where the window does. If it lives on another
+Space, macOS switches you there when the tool touches it. Keep Find My on the
 Space you work in, or assign it to all Spaces (Dock icon → Options → All
-Desktops).
+Desktops). If Find My is not running, the tool launches it with `open -g`,
+which does not take focus but makes the window appear once.
 
-Related, and separate: if Find My is not running at all, the tool launches it
-with `open -g`, which does not take keyboard focus but does make the window
-visibly appear once.
+### Paused friends and the notifications sheet
+
+A Find My launched in the background shows **Paused** on nearly every friend a
+few minutes later and stops refreshing them until it has been active. When at
+least half of the visible located rows read Paused, the tool makes Find My
+frontmost (`AXFrontmost`) until live ages return, holds it three seconds and
+hands focus back to the app that had it; a single paused friend never triggers
+this. Every launch also covers the window with a notifications pitch sheet
+("Enable Notifications" / "Not Now"); the tool presses Not Now. Any other sheet
+blocks the read and fails with exit `4`.
 
 ## Why this approach
 
@@ -83,33 +85,37 @@ a rendered list.
 
 ```sh
 just build                    # development binary
-nix build .#default            # installed-package build
+nix build .#default            # installed-package build (runs --selftest)
 nix run . -- --selftest        # packaged parser check
 ```
 
-Run `just test` for the parser self-checks (no app needed).
+Run `just test` for the parser self-checks (no app needed). The Nix build uses
+nixpkgs' Swift and SDK; where that SDK predates macOS 26, `--geocode` uses
+`CLGeocoder` instead of `MKGeocodingRequest`.
 
-The flake exports a Darwin package and `homeModules.default`; the module option
-`programs.friend-location-collector.enable` installs the reader only. No
-schedule, credential or user configuration is bundled. The package definition
-has passed evaluation and dry-run planning; its Nix compiler build remains
-unverified. Development selfchecks and typechecking use the installed Xcode.
-Consumers should make this flake's nixpkgs input follow their own nixpkgs.
+The flake exports a Darwin package and two modules; make the flake's nixpkgs
+input follow your own:
+
+- `homeModules.default`: `programs.friend-location-collector.enable` installs
+  the reader only.
+- `darwinModules.default`: `services.friend-location-collector` runs the
+  [collector](#collector) as a launchd user agent. It installs the reader as
+  `/Applications/FriendLocationCollector.app` and re-signs it at every
+  activation with one self-signed identity it creates once in the System
+  keychain, so its Accessibility grant survives rebuilds.
 
 **Accessibility permission.** Launched from a terminal, the binary inherits the
-terminal's existing Accessibility grant and needs no setup. Run from launchd or
-any non-granted parent, it needs its own grant in System Settings → Privacy &
-Security → Accessibility - TCC state that cannot be declared in nix, and which is
-per-binary, so it must be re-granted if the path changes. On macOS 26.1 bare Unix
-executables reportedly may not appear in that pane at all
-([Apple Forums 807323](https://developer.apple.com/forums/thread/807323)), in
-which case the binary needs wrapping in a signed `.app` bundle.
+terminal's Accessibility grant. The collector app needs its own grant: on its
+first run it adds itself to System Settings → Privacy & Security →
+Accessibility, where a human switches it on (TCC state cannot be declared).
 
 ## Usage
 
 ```
 findmy [all|people|devices|items]   snapshot a tab (default: all)
 findmy detail <name>                full street address for one entry
+findmy collect --hub URL --token-cmd CMD --handles FILE [--stream NAME] [--every SECONDS]
+                                    append coarse city checks to a soma stream
 findmy --selftest                   parser self-checks
 
   --geocode      with `detail`, resolve lat/lon locally via MapKit
@@ -129,8 +135,12 @@ address from the list or another pane.
 ```json
 {
   "fetched_at": "2026-08-20T17:02:31Z",
+  "coverage": {"scope": "full_list", "complete": true},
+  "incomplete": [],
   "people":  [{"name": "Jane Doe", "location": "Cupertino, CA",
-               "when": "5 min. ago", "distance": "0 mi", "raw": "..."}],
+               "when": "5 min. ago", "distance": "0 mi", "raw": "...",
+               "source_state": "available", "source_check_id": "...",
+               "checked_at": "2026-08-20T17:02:29Z"}],
   "devices": [...],
   "items":   [...]
 }
@@ -143,9 +153,8 @@ those exact source labels; `raw` is their assembled parsing representation.
 Nested text fragments and unrelated panes are not extra people. A duplicate
 field makes that row unreadable; snapshots remain explicitly incomplete.
 
-Visible-list snapshots always declare incomplete coverage and exit `5`.
-Unreadable tabs also produce a specific warning. Partial or missing output must
-never prove a person departed. The original `raw` text remains private output.
+The original `raw` text remains private output. Distances keep their
+thousands separators (`"2,470 mi"`).
 
 `source_handle_key` is a SHA-256 key only when the displayed source identity
 is an explicit international phone number or email address. Phone formatting
@@ -160,7 +169,9 @@ the actual accessibility check and its collection time. Serializing the same
 check does not renew either value. They are not location-fix identifiers or
 measured source timestamps; source age remains the original displayed text.
 
-`source_state` distinguishes `available`, `paused`, `unavailable` and `unknown`.
+`source_state` distinguishes `available`, `paused`, `unavailable`,
+`not_shared` (the person sees your location but shares none of theirs) and
+`unknown`.
 Paused rows may retain a displayed city, but do not provide fresh presence or
 a source timestamp. Unavailable placeholders are not locations. `fetched_at`
 is collection time; a displayed relative `when` is preserved as text and never
@@ -168,14 +179,70 @@ promoted to a measured source timestamp. Geocoded coordinates do not belong in
 a measured GPS stream.
 
 Exit codes: `2` no Accessibility grant · `3` cannot launch Find My ·
-`4` UI never became readable · `5` incomplete visible-list coverage or unread tabs.
+`4` UI never became readable · `5` a tab not proven completely read ·
+`6` a stream append failed · `64` bad usage or unreadable handle map ·
+`65` the token command failed.
+
+## Collector
+
+`findmy collect` reads the whole People list, resolves rows to your own person
+ids through a handle map and appends one JSON record per resolved row to a
+soma stream with `POST <hub>/v1/streams/<stream>/append` (one request per
+record, `Authorization: Bearer <token>`). `--every SECONDS` repeats forever;
+without it, one collection runs and its exit code is returned. Each collection
+prints one summary line (counts, the displayed-age histogram, any error; never
+identities).
+
+```json
+{"age_seconds": 120, "age_text": "2 min. ago", "checked_at": 1791573278,
+ "city": "Cupertino", "country": null, "location_text": "Cupertino, CA",
+ "paused": false, "person_id": "<your person id>", "region": "CA",
+ "run_complete": true, "run_rows": 33, "run_unresolved": 0,
+ "source": "findmy_ax", "source_check_id": "<uuid>"}
+```
+
+- **Claim grade: coarse.** `city` / `region` / `country` split the displayed
+  locality (`location_text`, verbatim): a two-letter second part is a region
+  code, any other second part a country. No coordinates, ever.
+- **Time.** `checked_at` (unix seconds) is when the row was read; `age_text`
+  is the displayed age verbatim and `age_seconds` its exact value (`Now` = 0,
+  sec./min./hr./day/wk. units; months, years and `Last …` are null). Neither is
+  a location-fix timestamp. `paused: true` rows and null ages are not fresh.
+- **Identity.** Only rows whose `source_handle_key` (an explicit phone/email
+  handle) appears in the `--handles` JSON object `{ "<source_handle_key>":
+  "<person id>" }` are written. Names never match. Rows that share a location
+  but do not resolve are counted in `run_unresolved`, never written; the self
+  row and `not_shared` rows are neither. `run_rows` = rows that share a
+  location; `run_complete` = whether the list was proven read.
+- **Token.** `--token-cmd` is run with `/bin/sh -c` before every collection;
+  its stdout is the token, which needs exactly `streams:append:<stream>`.
+
+On nix-darwin:
+
+```nix
+services.friend-location-collector = {
+  enable = true;
+  user = "alice";
+  hubUrl = "https://soma.example.workers.dev";
+  tokenCommand = "/usr/bin/security find-generic-password -s friend-location-collector -a soma-hub -w";
+  # handles = "/Users/alice/.local/state/friend-location-collector/handles.json";  (default)
+  # stream = "friend_city_checks"; interval = 600;                                 (defaults)
+};
+```
+
+The agent (`com.alexmiller.friend-location-collector`, `KeepAlive`, GUI
+session only) logs to `~/Library/Logs/friend-location-collector/collector.log`.
+Store the token where the command can read it from a launchd agent; for the
+login keychain, add it with `security add-generic-password -A` from a GUI
+session (`-A` lets the agent read it without a prompt).
 
 ## Other limits
 
 - **A logged-in GUI session with a real display.** A headless Mac with no
   framebuffer cannot open a Find My window, so there is nothing to read. Check
-  with `ioreg -c AppleDisplay -r | grep -c AppleDisplay` (must be ≥ 1); a ~$10
-  dummy HDMI plug or DeskPad solves it. Untested on the mini.
+  for a framebuffer (`system_profiler SPDisplaysDataType`); an Apple-silicon
+  Mac mini creates a virtual display with nothing attached, older machines may
+  need a dummy HDMI plug or DeskPad. The session must also stay unlocked.
 - **`--repair` is opt-in.** Find My can end up running with zero windows, which
   makes it unreadable. `activate()` usually rebuilds the window quietly; if that
   fails, `--repair` kills and relaunches, which makes the window visibly pop up.
@@ -191,8 +258,9 @@ Exit codes: `2` no Accessibility grant · `3` cannot launch Find My ·
 
 This surfaces other people's live locations. They consented to you seeing them in
 the Find My app; that is not the same as consenting to being logged into a
-database indefinitely. Prefer on-demand reads, or keep only the latest row per
-person rather than a history.
+database indefinitely. The collector keeps only city-grade text and the
+displayed age, never coordinates; prefer on-demand reads, or a store that keeps
+only the latest check per person, where you can.
 
 ## Implementation notes
 
@@ -214,6 +282,12 @@ Load-bearing and non-obvious, kept so they are not rediscovered the hard way:
   retried once after bouncing to another tab.
 - Run it as a compiled binary. The same code as `swift findmy.swift` fails on the
   launch path with `-25204 cannotComplete`.
+- The list container itself (the `AXTabGroup` sibling) carries
+  `AXScrollUpByPage` / `AXScrollDownByPage`; a page scroll keeps one or two rows
+  of overlap, which is what proves no row was skipped.
+- `NSRunningApplication.activate()` from a CLI does not bring Find My to the
+  front; setting `AXFrontmost` on its application element does, and the same
+  attribute on the previous app hands focus back.
 
 ## Prior art
 

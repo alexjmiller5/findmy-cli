@@ -202,8 +202,10 @@ identities).
 ```
 
 - **Claim grade: coarse.** `city` / `region` / `country` split the displayed
-  locality (`location_text`, verbatim): a two-letter second part is a region
-  code, any other second part a country. No coordinates, ever.
+  locality (`location_text`, verbatim): a trailing two-letter code is the
+  region and the part before it the city (`Place, City, ST` names a
+  neighbourhood first); otherwise the first part is the city and the last the
+  country. No coordinates, ever.
 - **Time.** `checked_at` (unix seconds) is when the row was read; `age_text`
   is the displayed age verbatim and `age_seconds` its exact value (`Now` = 0,
   sec./min./hr./day/wk. units; months, years and `Last …` are null). Neither is

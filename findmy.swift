@@ -227,21 +227,19 @@ func ageSeconds(_ text: String?) -> Int? {
 }
 
 struct Place: Equatable { let city: String?, region: String?, country: String? }
-/// Split a displayed locality. ponytail: a 2-letter second part is a region
-/// code (US/CA style), any other second part is a country; `location_text`
-/// keeps the verbatim display for consumers that need better.
+/// Split a displayed locality. ponytail: a trailing 2-letter code is a region
+/// (US/CA style) and the part before it the city ("Place, City, ST" names a
+/// neighbourhood first); otherwise "City, Country" or "City, Region, Country".
+/// `location_text` keeps the verbatim display for consumers that need better.
 func place(_ text: String?) -> Place {
     let parts = (text ?? "").components(separatedBy: ",")
         .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-    switch parts.count {
-    case 0: return Place(city: nil, region: nil, country: nil)
-    case 1: return Place(city: parts[0], region: nil, country: nil)
-    case 2:
-        let code = parts[1].range(of: #"^[A-Z]{2}$"#, options: .regularExpression) != nil
-        return Place(city: parts[0], region: code ? parts[1] : nil, country: code ? nil : parts[1])
-    default:
-        return Place(city: parts[0], region: parts.dropFirst().dropLast().joined(separator: ", "), country: parts.last)
+    guard let last = parts.last, parts.count > 1 else { return Place(city: parts.first, region: nil, country: nil) }
+    if last.range(of: #"^[A-Z]{2}$"#, options: .regularExpression) != nil {
+        return Place(city: parts[parts.count - 2], region: last, country: nil)
     }
+    let region = parts.dropFirst().dropLast().joined(separator: ", ")
+    return Place(city: parts[0], region: region.isEmpty ? nil : region, country: last)
 }
 
 /// One coarse check per friend row resolved through an explicit handle key.
@@ -367,6 +365,7 @@ if wantSelftest {
     assert(place("City 1, Country 1") == Place(city: "City 1", region: nil, country: "Country 1"))
     assert(place("City 1, Region 1, Country 1") == Place(city: "City 1", region: "Region 1", country: "Country 1"))
     assert(place("City 1") == Place(city: "City 1", region: nil, country: nil))
+    assert(place("Place 1, City 1, ST") == Place(city: "City 1", region: "ST", country: nil))
     assert(place(nil) == Place(city: nil, region: nil, country: nil))
     // City checks: resolved rows only, counted unresolved, no coordinates.
     let k1 = sourceHandleKey("+12025550101")!, k2 = sourceHandleKey("+12025550102")!

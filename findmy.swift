@@ -592,10 +592,12 @@ func selectTab(_ want: String, previousRows: [String] = []) -> [SourceRow]? {
 
 /// Accessibility grant, a running Find My and a readable window, or the exit
 /// code that says which one is missing.
+var promptedForTrust = false
 func prepare() throws {
     // The prompt only lists this binary in the Accessibility pane for a human
-    // to switch on; it grants nothing.
-    let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: mode == "collect"] as CFDictionary
+    // to switch on; it grants nothing. Once per process, not once per loop.
+    let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: mode == "collect" && !promptedForTrust] as CFDictionary
+    promptedForTrust = true
     guard AXIsProcessTrustedWithOptions(prompt) else {
         throw Failure(message: "no Accessibility permission. Grant it to this binary in "
             + "System Settings > Privacy & Security > Accessibility.", code: 2)

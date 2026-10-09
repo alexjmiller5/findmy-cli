@@ -66,7 +66,9 @@ few minutes later and stops refreshing them until it has been active. When at
 least half of the visible located rows read Paused, the tool makes Find My
 frontmost (`AXFrontmost`) until live ages return, holds it three seconds and
 hands focus back to the app that had it; a single paused friend never triggers
-this. Every launch also covers the window with a notifications pitch sheet
+this. The wake usually revives it within seconds but not always (3 of 24 reads
+in the cadence measurement below); then the rows stay `paused`, which is what
+gets recorded. Every launch also covers the window with a notifications pitch sheet
 ("Enable Notifications" / "Not Now"); the tool presses Not Now. Any other sheet
 blocks the read and fails with exit `4`.
 
@@ -223,6 +225,15 @@ identities).
   location; `run_complete` = whether the list was proven read.
 - **Token.** `--token-cmd` is run with `/bin/sh -c` before every collection;
   its stdout is the token, which needs exactly `streams:append:<stream>`.
+- **Freshness (measured).** 24 complete reads of a 33-friend list every ~5
+  minutes for 2 h 15 min on a weekday afternoon: of 792 friend row-reads, 69%
+  showed `Now`, 13% 1-4 min, 3% 5-9 min and none older (p99 6 min, max 8 min);
+  in 98% of consecutive read pairs a friend's location had updated in between.
+  12.5% were `Paused` (three whole reads where Find My paused app-wide and the
+  wake did not revive it; the next read was live) and 2.6% showed no place.
+  Proposed cutoff: a check is fresh when `paused` is false and `age_seconds`
+  is at most 600, and the check is at most 15 minutes old (one 10-minute
+  collection interval plus slack). Night-time cadence was not measured.
 
 On nix-darwin:
 

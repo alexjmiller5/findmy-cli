@@ -176,6 +176,8 @@ func parse(_ raw: String) -> [String: Any] {
     let loc = fields.joined(separator: ", ")
     if loc == "Can see your location" {
         row["source_state"] = "not_shared"
+    } else if ["Locating\u{2026}", "Locating..."].contains(loc) {
+        row["source_state"] = "unknown"
     } else if ["Address Unavailable", "No location found", "Location Not Available"].contains(loc) {
         row["source_state"] = "unavailable"
     } else if !loc.isEmpty {
@@ -326,6 +328,10 @@ if wantSelftest {
     // People who see your location but share none of theirs are not a location.
     let notShared = parse("Person 6, Can see your location")
     assert(notShared["source_state"] as? String == "not_shared" && notShared["location"] == nil)
+    // A friend still being located has no place yet.
+    for locating in ["Person 9, Locating\u{2026}", "Person 9, Locating..."] {
+        assert(parse(locating)["source_state"] as? String == "unknown" && parse(locating)["location"] == nil)
+    }
     let unavailable = parse("Person 2, No location found")
     assert(unavailable["source_state"] as? String == "unavailable")
     assert(unavailable["location"] == nil)

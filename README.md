@@ -176,7 +176,7 @@ measured source timestamps; source age remains the original displayed text.
 
 `source_state` distinguishes `available`, `paused`, `unavailable`,
 `not_shared` (the person sees your location but shares none of theirs) and
-`unknown`.
+`unknown` (no place shown, including "Locating…").
 Paused rows may retain a displayed city, but do not provide fresh presence or
 a source timestamp. Unavailable placeholders are not locations. `fetched_at`
 is collection time; a displayed relative `when` is preserved as text and never

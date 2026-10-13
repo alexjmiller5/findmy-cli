@@ -33,9 +33,11 @@ func usage() -> Never {
     OPTIONS
       --geocode        with `detail`, also resolve lat/lon (MapKit, local)
       --text           human-readable output instead of JSON
-      --repair         if the UI is unreadable, restart Find My.
-                       Off by default: relaunching makes the window
-                       visibly appear on screen.
+      --repair         if the UI is unreadable, or (collect) every exact
+                       displayed age is over 20 min (Find My stopped
+                       refreshing), restart Find My, at most hourly for
+                       staleness. Off by default: relaunching makes the
+                       window visibly appear on screen.
       --launch=no      never launch Find My; fail if it is not ready
 
     NOTES
@@ -214,6 +216,14 @@ func mergePage(_ sequence: [String], _ page: [String]) -> [String]? {
         .first(where: { Array(page.prefix($0)) == Array(sequence.suffix($0)) }) else { return nil }
     let rest = Array(page.dropFirst(k))
     return Set(rest).isDisjoint(with: sequence) ? rest : nil
+}
+
+/// A long-running Find My can stop refreshing friends: every displayed age
+/// then grows by the collection interval. True when at least three records
+/// show an exact age and even the freshest is older than `threshold` seconds.
+func staleView(_ records: [[String: Any]], threshold: Int) -> Bool {
+    let ages = records.compactMap { $0["age_seconds"] as? Int }
+    return ages.count >= 3 && ages.min()! > threshold
 }
 
 let ageRE = try! NSRegularExpression(pattern: #"^(\d+) (sec\.|min\.|hr\.|days?|wk\.) ago$"#)
@@ -410,7 +420,14 @@ if wantSelftest {
     assert(pickAddress(["Jane Doe", "Cupertino, CA • Now"]) == nil)
     assert(norm("Sam\u{2019}s iPhone") == "sam's iphone")
     assert(norm("Sam\u{2019}s iPhone").hasPrefix(norm("Sam's iPh")))
-    print("selftest ok (\(cases.count + 3) parse cases + source-handle keys + enumeration + city checks + address picker)")
+    // stale view: three exact ages all past the threshold; paused or vague ages never count
+    func aged(_ seconds: [Any]) -> [[String: Any]] { seconds.map { ["age_seconds": $0] } }
+    assert(staleView(aged([1500, 1800, 2100]), threshold: 1200))
+    assert(!staleView(aged([1500, 600, 2100]), threshold: 1200))
+    assert(!staleView(aged([1500, 1800]), threshold: 1200))
+    assert(!staleView(aged([1500, 1800, NSNull(), NSNull()]), threshold: 1200))
+    assert(!staleView(aged([1200, 1800, 2100]), threshold: 1200))
+    print("selftest ok (\(cases.count + 3) parse cases + source-handle keys + enumeration + city checks + address picker + stale view)")
     exit(0)
 }
 
@@ -536,6 +553,10 @@ func ensureWindow() {
     // Last resort, opt-in: the app will not rebuild a window for `open`, so
     // restart it. Find My is a stateless viewer, but the window visibly appears.
     didRepair = true
+    restartFindMy()
+}
+
+func restartFindMy() {
     if let pid = findMyApp()?.processIdentifier { kill(pid, SIGKILL) }
     let gone = Date().addingTimeInterval(10)
     while findMyApp() != nil && Date() < gone { Thread.sleep(forTimeInterval: 0.5) }
@@ -949,6 +970,7 @@ func append(_ body: Data, to url: URL, token: String) -> String? {
 /// One collection: enumerate People, resolve rows through the handle map and
 /// append one record per resolved row. Prints one summary line (counts and the
 /// displayed-age histogram, never identities) and returns the exit code.
+var lastStaleRestart: Date?
 func collectOnce(_ url: URL, tokenCommand: String, handlesPath: String) -> Int32 {
     var summary: [String: Any] = ["at": iso.string(from: Date()), "stream": streamName]
     defer { print(String(decoding: recordJSON(summary), as: UTF8.self)); fflush(stdout) }
@@ -984,6 +1006,14 @@ func collectOnce(_ url: URL, tokenCommand: String, handlesPath: String) -> Int32
         appended += 1
     }
     summary["appended"] = appended
+    // Opt-in self-heal: the next run reads a refreshed list. Hourly at most, so
+    // friends who genuinely stopped updating do not cause a restart loop.
+    if allowRepair && staleView(checks.records, threshold: 1200)
+        && lastStaleRestart.map({ Date().timeIntervalSince($0) >= 3600 }) ?? true {
+        lastStaleRestart = Date()
+        withUILock { restartFindMy() }
+        summary["restarted"] = "stale"
+    }
     if appended < checks.records.count { return 6 }
     return complete ? 0 : 5
 }

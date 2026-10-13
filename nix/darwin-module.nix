@@ -82,6 +82,17 @@ in
       default = 600;
       description = "Seconds between collections.";
     };
+
+    repair = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Pass `--repair`: restart Find My when its window is unreadable, or at
+        most hourly when every displayed age is over 20 minutes (a long-running
+        Find My can stop refreshing friends). The window visibly reappears, so
+        this suits an unattended Mac.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -125,7 +136,7 @@ in
         cfg.stream
         "--every"
         (toString cfg.interval)
-      ];
+      ] ++ lib.optional cfg.repair "--repair";
       KeepAlive = true;
       RunAtLoad = true;
       ThrottleInterval = 60;

@@ -127,7 +127,7 @@ findmy --selftest                   parser self-checks
 
   --geocode      with `detail`, resolve lat/lon locally via MapKit
   --text         human-readable instead of JSON
-  --repair       restart Find My if the UI is unreadable
+  --repair       restart Find My if the UI is unreadable or (collect) has stopped refreshing
   --launch=no    never launch Find My; fail if it is not ready
 ```
 
@@ -245,6 +245,7 @@ services.friend-location-collector = {
   tokenCommand = "/usr/bin/security find-generic-password -s friend-location-collector -a soma-hub -w";
   # handles = "/Users/alice/.local/state/friend-location-collector/handles.json";  (default)
   # stream = "friend_city_checks"; interval = 600;                                 (defaults)
+  # repair = false;  true on an unattended Mac: passes --repair                   (default)
 };
 ```
 
@@ -264,6 +265,11 @@ session (`-A` lets the agent read it without a prompt).
 - **`--repair` is opt-in.** Find My can end up running with zero windows, which
   makes it unreadable. `activate()` usually rebuilds the window quietly; if that
   fails, `--repair` kills and relaunches, which makes the window visibly pop up.
+  A long-running Find My can also stop refreshing friends while staying
+  readable (seen 2026-10-12 after three days up: every age grew by the
+  collection interval for an hour). With `--repair`, `collect` restarts it when
+  at least three friends show an exact age and even the freshest is over 20
+  minutes, at most once an hour, and logs `"restarted": "stale"`.
 - **Addresses, not GPS.** `detail` gives a street address and `--geocode` turns
   it into building-level coordinates. That is not a GPS fix.
 - **Some entries have no address.** Find My intermittently reports "Address

@@ -104,9 +104,11 @@ in
         _t="$(/usr/bin/mktemp -d)"
         /usr/bin/printf '[req]\ndistinguished_name=dn\nx509_extensions=v3\nprompt=no\n[dn]\nCN=%s\n[v3]\nbasicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n' ${identity} > "$_t/req.cnf"
         /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -keyout "$_t/key.pem" -out "$_t/cert.pem" -config "$_t/req.cnf"
-        # non-empty p12 password: `security` rejects empty-password PKCS12
-        /usr/bin/openssl pkcs12 -export -inkey "$_t/key.pem" -in "$_t/cert.pem" -out "$_t/id.p12" -passout pass:flc-signing-p12
-        /usr/bin/security import "$_t/id.p12" -k /Library/Keychains/System.keychain -P flc-signing-p12 -T /usr/bin/codesign -A
+        # one-time transport password for the throwaway p12 (`security`
+        # rejects empty-password PKCS12); the key then lives in the keychain
+        _p="$(/usr/bin/openssl rand -hex 16)"
+        /usr/bin/openssl pkcs12 -export -inkey "$_t/key.pem" -in "$_t/cert.pem" -out "$_t/id.p12" -passout "pass:$_p"
+        /usr/bin/security import "$_t/id.p12" -k /Library/Keychains/System.keychain -P "$_p" -T /usr/bin/codesign -A
         /bin/rm -rf "$_t"
       fi
 

@@ -427,6 +427,10 @@ if wantSelftest {
     assert(!staleView(aged([1500, 1800]), threshold: 1200))
     assert(!staleView(aged([1500, 1800, NSNull(), NSNull()]), threshold: 1200))
     assert(!staleView(aged([1200, 1800, 2100]), threshold: 1200))
+    // One accessibility node listed twice is one control; two nodes stay two.
+    assert(uniqueByIdentity([1, 1, 2], same: ==) == [1, 2])
+    assert(uniqueByIdentity([(1, "More Info"), (1, "More Info"), (2, "More Info")], same: { $0.0 == $1.0 }).map(\.0) == [1, 2])
+    assert(uniqueByIdentity([Int](), same: ==).isEmpty)
     print("selftest ok (\(cases.count + 3) parse cases + source-handle keys + enumeration + city checks + address picker + stale view)")
     exit(0)
 }
@@ -775,6 +779,16 @@ func enumerateList(maxPages: Int = 100) -> (rows: [SourceRow], complete: Bool) {
 
 // MARK: - Detail drill
 
+/// Drop repeated reports of one node. Find My's map callout lists the same
+/// More Info button twice in AXChildren; two distinct nodes must both remain.
+func uniqueByIdentity<T>(_ items: [T], same: (T, T) -> Bool) -> [T] {
+    var kept: [T] = []
+    for item in items where !kept.contains(where: { same($0, item) }) { kept.append(item) }
+    return kept
+}
+
+func sameElement(_ a: AXUIElement, _ b: AXUIElement) -> Bool { CFEqual(a, b) }
+
 /// Of a detail pane's labels, the street address is the one carrying a digit and
 /// a comma that is not a distance and not the "City • when" summary line.
 func pickAddress(_ texts: [String]) -> String? {
@@ -845,7 +859,7 @@ func detail(_ name: String) -> [String: Any] {
     }
     Thread.sleep(forTimeInterval: 2.5)
 
-    let infoButtons = role("AXButton").filter { label($0) == "More Info" }
+    let infoButtons = uniqueByIdentity(role("AXButton").filter { label($0) == "More Info" }, same: sameElement)
     guard infoButtons.count == 1, let info = infoButtons.first else {
         out["error"] = "no More Info button (entry may have no location)"
         restoreTab(original)
@@ -856,10 +870,16 @@ func detail(_ name: String) -> [String: Any] {
         restoreTab(original)
         return out
     }
-    Thread.sleep(forTimeInterval: 3.0)
 
-    let popovers = role("AXPopover")
-    guard popovers.count == 1, let popover = popovers.first else {
+    // The card's contents show up before its container's role is AXPopover.
+    let deadline = Date().addingTimeInterval(5)
+    var popover: AXUIElement?
+    while Date() < deadline {
+        let found = uniqueByIdentity(role("AXPopover"), same: sameElement)
+        if found.count == 1 { popover = found[0]; break }
+        Thread.sleep(forTimeInterval: 0.3)
+    }
+    guard let popover else {
         out["error"] = "no unique scoped detail pane"
         restoreTab(original)
         return out

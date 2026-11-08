@@ -48,11 +48,19 @@ Swift file, no dependencies. The installed package and app are named
   with a stderr warning and exit 5. Any new failure mode should do the same.
   Only the exact "Enable Notifications" / "Not Now" sheet is dismissed (Not
   Now); any other sheet fails the read.
-- Read one `HomeElementCell` at a time. Compact and expanded AX labels differ;
+- Read one row at a time: a `ListEntityRow` button (Find My 5, macOS 27) or a
+  `HomeElementCell` (earlier). Compact and expanded AX labels differ;
   title/subtitle/distance fragments never become independent people. Preserve
   exact labels in `raw_fields`, with `raw` the assembled parsing representation.
+- Find My 5 pages the list through the rows' nearest common ancestor inside the
+  container. Its page actions appear and disappear with scroll position, so
+  never pick the scroll target by the actions it offers.
 - Detail lookups require a unique source label and successful native actions.
-  Addresses come only from a unique scoped popover, never all window labels.
+  Addresses come only from a unique scoped pane (Find My 5: the details sheet
+  titled with the row's name, its `SecondaryLabel`; earlier: the More Info
+  popover), never all window labels. That sheet holds Stop Sharing and Remove
+  buttons: press only its `Close`, then deselect the row, since a selected row
+  shows a street-level place.
 - Each actual row read has an immutable `source_check_id` and `checked_at`.
   Serialization preserves both; a replay is not a second source check. These
   describe AX collection, never distinct sensor fixes or measured `tst`.

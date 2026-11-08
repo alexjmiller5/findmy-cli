@@ -27,6 +27,7 @@ Sam's iPhone
   Sam's iPhone, Infinite Loop, Cupertino , Now, 0 mi
   address: 1 Infinite Loop, Cupertino, CA 95014
   coords:  37.3317504, -122.0301353
+  timezone: America/Los_Angeles (PST)
 ```
 
 ## Coverage
@@ -77,7 +78,7 @@ blocks the read and fails with exit `4`.
 Everything else that reads Find My has a worse tradeoff:
 
 | Approach | People? | Cost |
-|---|---|---|
+| --- | --- | --- |
 | **This (accessibility tree)** | yes | Accessibility grant; needs a visible window; truncates (bug #1) |
 | FindMy.py / pyicloud | **no** | Apple login, anisette, account-ban risk |
 | findmy-cli (screenshot + OCR) | yes | Screen Recording grant, steals focus, awake display, OCR errors |
@@ -125,7 +126,7 @@ findmy collect --hub URL --token-cmd CMD --handles FILE [--stream NAME] [--every
                                     append coarse city checks to a soma stream
 findmy --selftest                   parser self-checks
 
-  --geocode      with `detail`, resolve lat/lon locally via MapKit
+  --geocode      with `detail`, resolve lat/lon and time zone locally via MapKit
   --text         human-readable instead of JSON
   --repair       restart Find My if the UI is unreadable or (collect) has stopped refreshing
   --launch=no    never launch Find My; fail if it is not ready
@@ -133,9 +134,15 @@ findmy --selftest                   parser self-checks
 
 `detail` prefers an exact label, then accepts a unique name prefix, case- and
 apostrophe-insensitive. Ambiguous prefixes fail without selecting an entry.
+It searches People, then Devices, then Items, reading each tab's whole list
+the way a snapshot does; it moves on to the next tab only when that list was
+proven complete without a match, and otherwise exits `5`. Find My is left on
+the tab it was showing.
 Selection and detail-opening must succeed; address labels come only from one
-scoped detail popover. Missing or changed native UI fails without reading an
-address from the list or another pane.
+scoped detail pane: in Find My 5 (macOS 27), the details sheet opened by the
+row's "Open Details" action and titled with its name; earlier, the More Info
+popover. The sheet is closed and the row deselected afterwards. Missing or
+changed native UI fails without reading an address from the list or another pane.
 
 ### Output
 
@@ -153,7 +160,11 @@ address from the list or another pane.
 }
 ```
 
-Each output record belongs to one native `HomeElementCell`. Compact and
+Each output record belongs to one native row. In Find My 5 that is a
+`ListEntityRow` button whose label joins name, distance, place and age with
+` · ` ("Jane Doe · 0 mi · Cupertino, CA · 5 min. ago"); fields are told apart
+by shape, since any but the name can be missing. Earlier versions use a
+`HomeElementCell`. Compact and
 expanded accessibility trees are supported: expanded title, subtitle and
 distance fields are assembled only within that cell. `raw_fields` preserves
 those exact source labels; `raw` is their assembled parsing representation.
@@ -183,7 +194,10 @@ Paused rows may retain a displayed city, but do not provide fresh presence or
 a source timestamp. Unavailable placeholders are not locations. `fetched_at`
 is collection time; a displayed relative `when` is preserved as text and never
 promoted to a measured source timestamp. Geocoded coordinates do not belong in
-a measured GPS stream.
+a measured GPS stream. With `--geocode`, `detail` also includes the time zone
+MapKit returned for that address (`time_zone.identifier`, plus that zone's
+abbreviation and UTC offset at collection time). The collector does not
+geocode, and does not record a time zone.
 
 Exit codes: `2` no Accessibility grant · `3` cannot launch Find My ·
 `4` UI never became readable · `5` a tab not proven completely read ·
@@ -271,7 +285,8 @@ session (`-A` lets the agent read it without a prompt).
   at least three friends show an exact age and even the freshest is over 20
   minutes, at most once an hour, and logs `"restarted": "stale"`.
 - **Addresses, not GPS.** `detail` gives a street address and `--geocode` turns
-  it into building-level coordinates. That is not a GPS fix.
+  it into building-level coordinates and the geocoder's time zone for that
+  address. That is not a GPS fix or a device-reported clock.
 - **Some entries have no address.** Find My intermittently reports "Address
   Unavailable" / "No location found"; `detail` reports that rather than inventing
   a location.
@@ -306,9 +321,11 @@ Load-bearing and non-obvious, kept so they are not rediscovered the hard way:
   retried once after bouncing to another tab.
 - Run it as a compiled binary. The same code as `swift findmy.swift` fails on the
   launch path with `-25204 cannotComplete`.
-- The list container itself (the `AXTabGroup` sibling) carries
-  `AXScrollUpByPage` / `AXScrollDownByPage`; a page scroll keeps one or two rows
-  of overlap, which is what proves no row was skipped.
+- Before Find My 5 the list container itself (the `AXTabGroup` sibling) carries
+  `AXScrollUpByPage` / `AXScrollDownByPage`. In Find My 5 the rows' nearest
+  common ancestor inside it does, and it drops `AXScrollDownByPage` at the
+  bottom, so it is found structurally. A page scroll keeps rows of overlap,
+  which is what proves no row was skipped.
 - `NSRunningApplication.activate()` from a CLI does not bring Find My to the
   front; setting `AXFrontmost` on its application element does, and the same
   attribute on the previous app hands focus back.
